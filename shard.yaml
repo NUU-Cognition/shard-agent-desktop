@@ -1,0 +1,12 @@
+shard-spec: "0.4.0"
+shard: "@nuucognition/agent-desktop"
+id: e4ddd1ca-77de-43fb-903f-6afe31a62492
+source:
+  id: ed59ae91-ce74-4e42-8c21-66d583ca7dc1
+version: "0.1.0"
+name: Agent Desktop
+shorthand: ad
+description: Operate native desktop apps via the agent-desktop CLI — the OS accessibility tree, snapshot-and-ref automation, one agent-desktop session for each Orbh session, and claims on a desktop that the human shares
+dependencies:
+  "@nuucognition/flint": ""
+setup: local
