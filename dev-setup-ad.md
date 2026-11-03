@@ -37,8 +37,7 @@ One-time setup for each machine: install the `agent-desktop` CLI, and check its 
    - When it reports `denied`, a person adds the `agent-desktop` binary itself in System Settings > Privacy & Security > Accessibility (the real file of `command -v agent-desktop`, after symbolic links). Then dispatch the check again. When the grant is still not possible, write in the Flint Init that only interactive sessions use the shard on this machine.
 5. **Run one smoke test** on an app that the person does not use now. Calculator is a good target when it does not run:
    ```bash
-   flint shard ad desktop start
-   S=$(flint shard ad desktop id)
+   S=$(flint shard ad desktop start)     # run this block in one shell call: $S does not reach the next call
    flint shard ad desktop claim Calculator
    agent-desktop --session "$S" launch Calculator
    agent-desktop --session "$S" snapshot --app Calculator -i --compact   # refs for the buttons

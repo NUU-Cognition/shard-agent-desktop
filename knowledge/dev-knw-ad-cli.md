@@ -4,7 +4,7 @@ description: "The agent-desktop CLI — the JSON envelope, sessions, the observe
 
 # Knowledge: The agent-desktop CLI
 
-`agent-desktop` is a Rust CLI from Vercel Labs. It reads and operates desktop apps through the accessibility tree of the OS (macOS AX, Windows UIA, Linux AT-SPI). It is a tool, not an agent: you run the loop. This file keeps only the rules that do not go stale, and the conventions of this workspace.
+`agent-desktop` is a Rust CLI from Vercel Labs. It reads and operates desktop apps through the accessibility tree of the OS (macOS AX, Windows UIA, Linux AT-SPI). It is a tool, not an agent: you run the loop. This file keeps only the rules that do not go stale, and the conventions of this workspace. It was checked against agent-desktop 1.0.2.
 
 **The CLI is the authority.** It contains its own guides, matched to the installed version. When this file and the CLI disagree, the CLI wins.
 
@@ -32,11 +32,11 @@ Each command prints one JSON envelope on stdout: `{ version, ok, command, data }
 An agent-desktop session is a folder under `~/.agent-desktop/sessions/<id>/` (`AGENT_DESKTOP_HOME` moves the root). It holds the snapshots of the session and, when the trace is on, a trace. In this workspace, each Orbh session has its own agent-desktop session, and the script of the shard makes it:
 
 ```bash
-flint shard ad desktop start                  # → run-<ms>-<pid>-<n>, stored in the Orbh key `desktop`
+flint shard ad desktop start                  # stdout has only the id run-<ms>-<pid>-<n>; the messages go to stderr; stored in the Orbh key `desktop`
 flint shard ad desktop id                     # prints the id again
 ```
 
-- **Pass `--session <id>` to every command.** Each shell call of an agent is a new process, so an `export AGENT_DESKTOP_SESSION=…` does not reach the next call.
+- **Pass `--session <id>` to every command, with the literal id.** Each shell call of an agent is a new process, so an `export AGENT_DESKTOP_SESSION=…` or a variable such as `$S` does not reach the next call. In this file, `<S>` is the literal id.
 - **A ref belongs to its session.** A ref from one session fails with `SNAPSHOT_NOT_FOUND` in another session, or with no session.
 - **An ended session refuses every command** except `version` and `skills` (`INVALID_ARGS`, `details.kind: "session_ended"`). So close your apps and read the trace before `flint shard ad desktop end`. The trace files stay in `~/.agent-desktop/sessions/<id>/trace/`.
 - `agent-desktop --session <id> trace show` reads the trace of an open session. `trace export --out <file>` writes an HTML viewer. Write it in `$ORBH_SCRATCH_DIR`.
@@ -45,18 +45,19 @@ flint shard ad desktop id                     # prints the id again
 ## The Loop: Observe, Act, Verify
 
 ```bash
-S=<the id from flint shard ad desktop start>
-agent-desktop --session "$S" snapshot --app "Calculator" -i --compact    # observe: each actionable element has a ref
-agent-desktop --session "$S" click @s1nyctnh1u0fzn:e6                    # act on a qualified ref
-agent-desktop --session "$S" snapshot --root @s1nyctnh1u0fzn:e1 --compact # verify: read the same region again
+agent-desktop --session <S> snapshot --app "Calculator" -i --compact    # observe: each actionable element has a ref
+agent-desktop --session <S> click @s1nyctnh1u0fzn:e6                    # act on a qualified ref
+agent-desktop --session <S> snapshot --root @s1nyctnh1u0fzn:e1 --compact # verify: read the same region again, with no -i
 ```
 
 - **A small app:** take a full `snapshot --app "<App>" -i --compact`.
 - **A dense app** (Slack, Xcode, an Electron app): map it first, then look inside one region. `snapshot --skeleton --app "<App>" -i --compact` gives a shallow map with `children_count` on each cut branch. `snapshot --root @<ref> -i --compact` reads one region.
 - **A known target:** `find --app "<App>" --role button --name "Save" --first` returns the ref with no snapshot of the tree.
-- **Never take a skeleton of a surface.** A menu, sheet, or alert is already small.
+- **Never take a skeleton of a menu, sheet, or alert.** Each one is already small.
+- **Do not read the full menu bar.** `--surface menubar -i` gave 176 refs on Calculator, and a skeleton of it still gave 82. To reach one item, use `find --app "<App>" --surface menubar --name "<Item>" --first`.
 - **Verify by reading, not by the return code.** An accessibility call can return success and do nothing. Read again with a drill-down snapshot, `get`, or `is`.
-- **Static text gets no ref.** To read a label or a display (for example the result of Calculator), take a drill-down snapshot of the region that holds it, and read the `name` or `value` of the text node. `get --property value` on the container can return `null`.
+- **`-i` hides static text.** It keeps only interactive elements, and static text gets no ref. To read a label or a display (for example the result of Calculator), take a drill-down snapshot of the region with no `-i`, and read the `name` or `value` of the text node. `get --property value` on the container can return `null`.
+- **A displayed value can hold invisible characters.** The display of Calculator reads U+200E and then `144`, so an exact compare with `144` fails. Remove the format characters first, for example with `jq 'gsub("\\p{Cf}"; "")'`.
 
 ## Refs
 
@@ -95,36 +96,46 @@ The global flag `--headed` is a permission for physical input: it can take focus
 - On macOS, `double-click` (with no `AXOpen`), `triple-click`, `hover`, `drag`, and the `mouse-*` commands need `--headed`. `agent-desktop skills get platform` has the table for each OS.
 - A physical result is usually `delivered_unverified`. Read the state after it.
 
+**`press` is the exception.** It is always synthesized key input: the result reports `physical_synthetic` also with no `--headed`. In this workspace:
+
+- `press <keys> --app "<App>"` needs no headed permit, in an app that you claim. The keys go to that process, the focus stays, and the pointer does not move.
+- A key acts as the app defines it. Escape cleared the display of Calculator. So use a semantic command when one exists, read the state after each key, and do not repeat a key: `retry` is `unsafe`.
+- `press` with no `--app` or `--window-id` goes to the foreground app, which can be the app of the person. Never run it without a headed permit and the headed claim.
+- `press --app` fails with `ACTION_FAILED` and `not_delivered` when the app has no focused element, for example when it has no window.
+
 ## Surfaces
 
 A surface is a UI layer that you observe alone: `menu`, `menubar`, `sheet`, `popover`, `alert`, or `focused` (on macOS, `status` lists them in `supported_surfaces`).
 
-- `snapshot --app "<App>" --surface menubar -i` reads the File, Edit, and View menus and the status items of the menu bar.
+- `find --app "<App>" --surface menubar --name "<Item>" --first` reaches one item of the File, Edit, and View menus. A headless `click` on its ref works (`semantic_api`).
 - An action that opens a menu, sheet, or alert lists it in `data.surfaces`. Read that surface next.
 - **While a surface is open, the refs of the window behind it are the wrong target.**
 - On macOS, when `right-click` returns `APP_UNRESPONSIVE` with `retry: unsafe`, the menu is open: do not retry. Read it with `--surface menu`. For a combo box or a menu button, use `select @<ref> "<Option>"`.
+- `select` can refuse a control with the role `button` (`ACTION_NOT_SUPPORTED`, with `delivery` and `retry` both `unknown`), and a `click` on it can return `ok: true` and open no surface (the Mode control of Calculator). Read the state, and then use the same command in the menu bar.
 
 ## Waits
 
-After an asynchronous step (a launch, a save, a load), use `wait` with a predicate. A fixed `sleep` is a race. `agent-desktop wait --help` lists the predicates. Two common forms:
+After an asynchronous step (a launch, a save, a load), use `wait` with a predicate. A fixed `sleep` is a race. `agent-desktop wait --help` lists the predicates. Three common forms:
 
 ```bash
-agent-desktop --session "$S" wait --element @<ref> --predicate actionable
-agent-desktop --session "$S" wait --notification --app "<App>"     # a banner that goes away before you list it
+agent-desktop --session <S> wait --window "<Title>" --app "<App>"    # after a launch: it needs no ref, and the title is in data.window.title
+agent-desktop --session <S> wait --element @<ref> --predicate actionable
+agent-desktop --session <S> wait --notification --app "<App>"        # a banner that goes away before you list it
 ```
 
 ## Apps, Windows, Keys, and the Clipboard
 
 | Command | Notes |
 |---|---|
-| `list-apps`, `list-windows --app "<App>"` | `--app` takes the display name that `list-apps` prints. A window id (`w-4521`) is valid for the life of the window. `list-windows` of an app that does not run returns `APP_NOT_FOUND` |
-| `launch "<App>"` | A display name or a bundle id. It returns when the process runs. With no `--activate`, the new window does not take the focus. `--activate` brings the app to the front and waits for a window: that takes the focus of the person |
+| `list-apps`, `list-windows --app "<App>"` | `--app` takes the display name that `list-apps` prints. A window id (`w-4521`) is valid for the life of the window. `list-windows` returns `APP_NOT_FOUND` for an app that does not run, and `ok: true` with an empty list for an app that runs with no window |
+| `launch "<App>"` | A display name or a bundle id. It returns when the process runs. With no `--activate`, the new window does not take the focus. `--activate` brings the app to the front and waits for a window: that takes the focus of the person. The result can show `visible: false` and zero bounds until the window is ready: use `wait --window` |
 | `find --app "<App>" --role <role> --name "<Name>" --first` | The ref is in `data.match.ref_id`, with its `snapshot_id` |
 | `close-app "<App>"` | Only for an app that you launched in this task. A protected process of the OS is refused |
-| `press cmd+s --app "<App>"` | Sends keys to one app without a change of focus. On macOS the modifier is `cmd` |
+| The Close button of a window | Some apps quit with their last window (Dictionary), and some keep running with no window (Script Editor) |
+| `press cmd+s --app "<App>"` | Sends synthesized keys to one app without a change of focus (§ Headless and Headed Input). On macOS the modifier is `cmd` |
 | Quit shortcuts (`cmd+q`, …) | `POLICY_DENIED` unless `--force`. Never pass `--force`: use `close-app` for an app that you launched |
 | `clipboard-get`, `clipboard-set`, `clipboard-clear` | The clipboard of the person. See the rules of the init |
-| `batch` | Many commands in one process. `--headed` applies to each entry |
+| `batch '[{"command":"click","args":{"ref_id":"@<snapshot>:e3"}}]'` | Many commands in one process, in order. It is not atomic. The envelope has `ok: true` even when an entry fails: read each `data.results[].ok`. `--stop-on-error` halts at the first failure. `--headed` applies to each entry |
 
 ## Chromium and Electron Apps
 
@@ -133,7 +144,7 @@ agent-desktop reads a Chromium or Electron app through the accessibility tree, a
 For the web content of an app that you can start fresh, use agent-desktop to start it with a DevTools port, and the Agent Browser shard (`ab`) to drive the web content:
 
 ```bash
-agent-desktop --session "$S" launch "Obsidian" --cdp --arg=--user-data-dir="$ORBH_SCRATCH_DIR/obsidian-profile"
+agent-desktop --session <S> launch "Obsidian" --cdp --arg=--user-data-dir="$ORBH_SCRATCH_DIR/obsidian-profile"
 # data.cdp.port → agent-browser --cdp <port> snapshot -i   (the skill use_electron of the shard ab)
 ```
 
@@ -156,8 +167,10 @@ Snapshots, screenshots, the clipboard, notifications, traces, and the `--screens
 | `PERM_DENIED`, or `permissions` shows `denied` | The app that started this process has no Accessibility grant | Do the setup of the shard: [[dev-setup-ad]] |
 | Few nodes or no refs | Missing permission, a custom-drawn UI, or a Chromium renderer that is not ready | Check `permissions`, drop `-i`, raise `--timeout-ms`, and run `list-surfaces` |
 | `complete: false`, or a slow snapshot | A deep tree ran out of time | `find`, or a skeleton and `--root` |
-| `WINDOW_NOT_FOUND` | The app has no open window | `list-windows --app "<App>"`. Start a window only when the task needs one |
+| `WINDOW_NOT_FOUND` | The app has no open window. `snapshot` and `find` both return it | `list-windows --app "<App>"`. Start a window only when the task needs one: `launch "<App>" --activate` takes the focus of the person, so ask first |
 | `"Invalid ref_id '@1'"` | The zsh trap | Write `"@${SNAP}:e1"` |
 | `select` cannot confirm the choice | A menu was open before | Close the open menu, then run `select` again |
+| `ACTION_NOT_SUPPORTED` from `select` | The control has no select path | Read the state. Use the same command in the menu bar (§ Surfaces) |
+| `ACTION_FAILED` from `press --app` | The app has no focused element | Use a semantic command, or the same command in the menu bar |
 | A shortcut does nothing | `ctrl` used for `cmd`, or the keys went to another app | Use `cmd+…`, or scope the keys with `--app` |
 | Any other error | — | `agent-desktop skills get platform troubleshooting` |

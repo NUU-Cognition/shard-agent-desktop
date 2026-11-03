@@ -2,7 +2,8 @@
 // flint shard ad desktop [list|start|id|claim|release|end|gc] [args]
 //   list                                       the permissions, the claims of the live Orbh sessions, clashes, and the open agent-desktop sessions
 //   start [--cursor] [--no-trace] [--screenshots] [--session <orbh-id>]
-//                                              start one agent-desktop session for an Orbh session (default: this one), or reuse the open one
+//                                              start one agent-desktop session for an Orbh session (default: this one), or reuse the open one;
+//                                              stdout has only the id, and the messages go to stderr
 //   id [--session <orbh-id>]                   print the agent-desktop session id of the Orbh session (for --session)
 //   claim [<app>] [--headed] [--session <orbh-id>]
 //                                              claim an app, and with --headed the one headed claim of this machine
@@ -128,6 +129,23 @@ function sameApp(a, b) {
   return a.toLowerCase() === b.toLowerCase();
 }
 
+// Two names that can mean one app: the same name, or one name inside the other
+// ("Calc" and "Calculator", "com.apple.calculator" and "Calculator").
+function appsClash(a, b) {
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x.includes(y) || y.includes(x);
+}
+
+// A claim works by name, and the app can be not running yet: so a note, not a refusal.
+function noteDisplayName(app) {
+  const e = ad(['list-apps']);
+  const apps = (e.ok && e.data && e.data.apps) || null;
+  if (apps && !apps.some((a) => typeof a.name === 'string' && sameApp(a.name, app))) {
+    console.log(`  Note: no running app has the display name "${app}". After a launch, claim the name that \`agent-desktop list-apps\` prints.`);
+  }
+}
+
 function isSelf(sessionId, target) {
   return sessionId === target || sessionId.startsWith(target) || target.startsWith(sessionId);
 }
@@ -174,16 +192,14 @@ function list() {
     console.log(`  ${label(session)}  ${claim.session || '(no agent-desktop session)'}  apps: ${apps}${claim.headed ? '  HEADED' : ''}`);
   }
 
-  const byApp = new Map();
-  for (const { session, claim } of held) {
-    for (const a of claim.apps) {
-      const k = a.toLowerCase();
-      if (!byApp.has(k)) byApp.set(k, { app: a, holders: [] });
-      byApp.get(k).holders.push(session);
+  for (let i = 0; i < held.length; i++) {
+    for (let j = i + 1; j < held.length; j++) {
+      for (const a of held[i].claim.apps) {
+        for (const b of held[j].claim.apps) {
+          if (appsClash(a, b)) console.log(`  ⚠ Clash: ${label(held[i].session)} claims "${a}", and ${label(held[j].session)} claims "${b}".`);
+        }
+      }
     }
-  }
-  for (const { app, holders } of byApp.values()) {
-    if (holders.length > 1) console.log(`  ⚠ Clash: "${app}" is claimed by ${holders.map(label).join(' and ')}.`);
   }
   const headed = held.filter((c) => c.claim.headed);
   console.log(`  Headed claim: ${headed.length ? headed.map((c) => label(c.session)).join(', ') : 'none'}`);
@@ -223,8 +239,9 @@ function start(target, opts) {
   const cur = readClaim(target) || emptyClaim();
   const ds = openDesktopSessions();
   if (cur.session && ds.ok && ds.open.some((s) => s.session_id === cur.session)) {
-    console.log(`✓ The Orbh session ${target.slice(0, 8)} already has the agent-desktop session ${cur.session}.`);
-    console.log(`  drive with:  agent-desktop --session ${cur.session} <command>`);
+    console.error(`✓ The Orbh session ${target.slice(0, 8)} already has the agent-desktop session ${cur.session}.`);
+    console.error(`  drive with:  agent-desktop --session ${cur.session} <command>`);
+    console.log(cur.session);
     return;
   }
   const args = ['session', 'start', '--name', `${NAME_PREFIX}${target.slice(0, 8)}`];
@@ -234,9 +251,10 @@ function start(target, opts) {
   const e = adOrFail(args);
   const claim = { ...cur, session: e.data.session_id, startedAt: new Date().toISOString() };
   writeClaim(target, claim);
-  console.log(`✓ Started the agent-desktop session ${e.data.session_id} for the Orbh session ${target.slice(0, 8)} (trace ${e.data.trace}${opts.cursor ? ', cursor overlay' : ''}).`);
-  console.log(`  drive with:  agent-desktop --session ${e.data.session_id} <command>`);
-  console.log('  next:        flint shard ad desktop claim "<App>"');
+  console.error(`✓ Started the agent-desktop session ${e.data.session_id} for the Orbh session ${target.slice(0, 8)} (trace ${e.data.trace}${opts.cursor ? ', cursor overlay' : ''}).`);
+  console.error(`  drive with:  agent-desktop --session ${e.data.session_id} <command>`);
+  console.error('  next:        flint shard ad desktop claim "<App>"');
+  console.log(e.data.session_id);
 }
 
 function id(target) {
@@ -264,9 +282,10 @@ function claim(app, target, opts) {
   }
 
   if (app) {
-    const holders = others.filter((c) => c.claim.apps.some((a) => sameApp(a, app)));
+    const holders = others.filter((c) => c.claim.apps.some((a) => appsClash(a, app)));
     if (holders.length) {
-      console.log(`⚠ "${app}" is also claimed by ${holders.map((c) => label(c.session)).join(', ')}. Agree with that session before you act in the app: flint orbh message send ${holders[0].session.id} "<…>"`);
+      const names = holders.map((c) => `${label(c.session)} ("${c.claim.apps.filter((a) => appsClash(a, app)).join('", "')}")`);
+      console.log(`⚠ "${app}" clashes with the claim of ${names.join(', ')}. Agree with that session before you act in the app: flint orbh message send ${holders[0].session.id} "<…>"`);
     }
   }
 
@@ -280,6 +299,7 @@ function claim(app, target, opts) {
   if (opts.headed) parts.push('the headed claim');
   console.log(`✓ The Orbh session ${target.slice(0, 8)} claims ${parts.join(' and ')}. Apps: ${cur.apps.join(', ') || '(none)'}${cur.headed ? ' · HEADED' : ''}`);
   if (opts.headed) console.log('  Use --headed only for a step that needs physical input, and only when the person permits it. Release it after that step: flint shard ad desktop release --headed');
+  if (app) noteDisplayName(app);
   if (!cur.session) console.log('  This Orbh session has no agent-desktop session yet. Next: flint shard ad desktop start');
 }
 

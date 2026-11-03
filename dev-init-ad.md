@@ -26,9 +26,9 @@ One script keeps the agent-desktop session and the claims of each Orbh session. 
 
 ```bash
 flint shard ad desktop list                      # the permissions, the claims of the live sessions, clashes, the open agent-desktop sessions
-flint shard ad desktop start [--cursor]          # start (or reuse) the agent-desktop session of this Orbh session; prints the id
+flint shard ad desktop start [--cursor]          # start (or reuse) the agent-desktop session of this Orbh session; stdout has only the id
 flint shard ad desktop id                        # print that id again
-flint shard ad desktop claim "<App>"             # claim an app; warns when another live session claims it
+flint shard ad desktop claim "<App>"             # claim an app by its display name; warns on the same name, or one name inside the other, in another live session
 flint shard ad desktop claim "<App>" --headed    # also take the one headed claim of this machine; refuses when another session holds it
 flint shard ad desktop release [<App>] [--headed] # drop one claim, or every claim when no argument is given
 flint shard ad desktop end                       # end the agent-desktop session and clear the claim
@@ -47,13 +47,13 @@ agent-desktop --session <id> click @<snapshot>:e8                   # act on a q
 agent-desktop --session <id> snapshot --root @<snapshot>:e3 --compact # verify: read the region again
 ```
 
-Pass `--session <id>` to every command. The usage model is [[dev-knw-ad-cli]] (required reading): the envelope, the loop, refs, delivery and retry, headless and headed input, surfaces, waits, and the zsh trap. Before the first action in a context, also read the guides of the CLI: `agent-desktop skills get desktop` and `agent-desktop skills get platform`. When this shard and the CLI disagree, the CLI wins.
+Pass `--session <id>` to every command, with the literal id: each shell call is a new process, so a variable does not reach the next call. The usage model is [[dev-knw-ad-cli]] (required reading): the envelope, the loop, refs, delivery and retry, headless and headed input, surfaces, waits, and the zsh trap. Before the first action in a context, also read `agent-desktop skills get platform`. Read `agent-desktop skills get desktop` only when the version is not 1.0.2, or when a result is not in the knowledge. When this shard and the CLI disagree, the CLI wins.
 
 ## Safety Rules
 
 The desktop is live, and the person can use it now. Each rule protects the work of the person.
 
-1. **Headless by default.** Use `--headed` only when a step needs physical input by nature and the person permits it, with the headed claim. Never add `--headed` to recover from a failure.
+1. **Headless by default.** Use `--headed` only when a step needs physical input by nature and the person permits it, with the headed claim. Never add `--headed` to recover from a failure. `press --app` in an app that you claim needs no permit, and `press` with no scope needs the permit ([[dev-knw-ad-cli]] § Headless and Headed Input).
 2. **Close only what you launched.** `close-app` only an app that you started in this task. Never close an app that the person had open, and never close Obsidian: in this workspace it holds the terminal panes and the attach clients of the Orbh sessions. Never pass `--force` to a quit shortcut.
 3. **Act only in the apps that you claim.** When another live session claims the app, agree with that session first (`flint orbh message send <id> "<…>"`). Two writers in one editor corrupt each other.
 4. **The clipboard belongs to the person.** Read it only when the task needs it. Before `clipboard-set`, read the old value, and put it back after the step.
